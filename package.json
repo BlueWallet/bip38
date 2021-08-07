@@ -61,5 +61,8 @@
     "_stream_duplex": "readable-stream/duplex",
     "_stream_passthrough": "readable-stream/passthrough",
     "stream": "stream-browserify"
+  },
+  "peerDependencies": {
+    "react-native-blue-crypto": "*"
   }
 }

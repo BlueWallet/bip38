@@ -1,3 +1,4 @@
+const BlueCrypto = require('react-native-blue-crypto');
 var aes = require('browserify-aes')
 var assert = require('assert')
 var Buffer = require('safe-buffer').Buffer
@@ -45,6 +46,18 @@ function getAddress (d, compressed) {
   hash.copy(payload, 1)
 
   return bs58check.encode(payload)
+}
+
+async function scryptWrapper(secret, salt, N, r, p, dkLen, progressCallback, promiseInterval) {
+  if (BlueCrypto.isAvailable()) {
+    secret = Buffer.from(secret).toString('hex');
+    salt = Buffer.from(salt).toString('hex');
+    const hex = await BlueCrypto.scrypt(secret, salt, N, r, p, dkLen);
+    return Buffer.from(hex, 'hex');
+  } else {
+    // fallback to js implementation
+    return await scrypt.async(secret, salt, N, r, p, dkLen, progressCallback, promiseInterval);
+  }
 }
 
 function prepareEncryptRaw (buffer, compressed, passphrase, scryptParams) {
@@ -100,7 +113,7 @@ async function encryptRawAsync (buffer, compressed, passphrase, progressCallback
     p
   } = prepareEncryptRaw(buffer, compressed, passphrase, scryptParams)
 
-  var scryptBuf = await scrypt.async(secret, salt, N, r, p, 64, progressCallback, promiseInterval)
+  var scryptBuf = await scryptWrapper(secret, salt, N, r, p, 64, progressCallback, promiseInterval)
 
   return finishEncryptRaw(buffer, compressed, salt, scryptBuf)
 }
@@ -172,7 +185,7 @@ function finishDecryptRaw (buffer, salt, compressed, scryptBuf) {
   var d = BigInteger.fromBuffer(privateKey)
   var address = getAddress(d, compressed)
   var checksum = hash256(address).slice(0, 4)
-  assert.deepStrictEqual(salt, checksum)
+  assert.deepStrictEqual(salt, checksum, 'Invalid private key.')
 
   return {
     privateKey: privateKey,
@@ -192,7 +205,7 @@ async function decryptRawAsync (buffer, passphrase, progressCallback, scryptPara
   } = prepareDecryptRaw(buffer, progressCallback, scryptParams)
   if (decryptEC === true) return decryptECMultAsync(buffer, passphrase, progressCallback, scryptParams, promiseInterval)
 
-  var scryptBuf = await scrypt.async(passphrase.normalize('NFC'), salt, N, r, p, 64, progressCallback, promiseInterval)
+  var scryptBuf = await scryptWrapper(passphrase.normalize('NFC'), salt, N, r, p, 64, progressCallback, promiseInterval)
   return finishDecryptRaw(buffer, salt, compressed, scryptBuf)
 }
 
@@ -274,7 +287,7 @@ function getPassIntAndPoint (preFactor, ownerEntropy, hasLotSeq) {
     passPoint: curve.G.multiply(passInt).getEncoded(true)
   }
 }
-
+// async function decryptECMult (buffer, passphrase, progressCallback, scryptParams) {
 function finishDecryptECMult (seedBPass, encryptedPart1, encryptedPart2, passInt, compressed) {
   var derivedHalf1 = seedBPass.slice(0, 32)
   var derivedHalf2 = seedBPass.slice(32, 64)
@@ -322,16 +335,27 @@ async function decryptECMultAsync (buffer, passphrase, progressCallback, scryptP
     p
   } = prepareDecryptECMult(buffer, passphrase, progressCallback, scryptParams)
 
-  var preFactor = await scrypt.async(passphrase, ownerSalt, N, r, p, 32, progressCallback, promiseInterval)
+  var preFactor = await scryptWrapper(passphrase, ownerSalt, N, r, p, 32, progressCallback, promiseInterval)
+
 
   const {
     passInt,
     passPoint
   } = getPassIntAndPoint(preFactor, ownerEntropy, hasLotSeq)
 
-  var seedBPass = await scrypt.async(passPoint, Buffer.concat([addressHash, ownerEntropy]), 1024, 1, 1, 64, undefined, promiseInterval)
+  var seedBPass = await scryptWrapper(passPoint, Buffer.concat([addressHash, ownerEntropy]), 1024, 1, 1, 64, undefined, promiseInterval)
 
-  return finishDecryptECMult(seedBPass, encryptedPart1, encryptedPart2, passInt, compressed)
+  const res = finishDecryptECMult(seedBPass, encryptedPart1, encryptedPart2, passInt, compressed)
+
+  // added by overtorment: see https://github.com/bitcoinjs/bip38/issues/60
+  // verify salt matches address
+  var d = BigInteger.fromBuffer(res.privateKey)
+  var address = getAddress(d, compressed)
+  var checksum = hash256(address).slice(0, 4)
+  var salt = buffer.slice(2, 6)
+  assert.deepEqual(salt, checksum, 'Incorrect passphrase.')
+
+  return res
 }
 
 function decryptECMult (buffer, passphrase, progressCallback, scryptParams) {
@@ -386,12 +410,13 @@ function verify (string) {
   return true
 }
 
+// expose only async methods. they use fast BlueCrypto
 module.exports = {
-  decrypt: decrypt,
-  decryptECMult: decryptECMult,
-  decryptRaw: decryptRaw,
-  encrypt: encrypt,
-  encryptRaw: encryptRaw,
+  // decrypt: decrypt,
+  // decryptECMult: decryptECMult,
+  // decryptRaw: decryptRaw,
+  // encrypt: encrypt,
+  // encryptRaw: encryptRaw,
   decryptAsync: decryptAsync,
   decryptECMultAsync: decryptECMultAsync,
   decryptRawAsync: decryptRawAsync,
